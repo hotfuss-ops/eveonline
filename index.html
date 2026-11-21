@@ -5,6 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>EVE Character Dashboard</title>
+
     <style>
         body {
             background: #101820;
@@ -13,6 +14,7 @@
             text-align: center;
             padding: 80px 20px;
         }
+
         button {
             background: #d99b36;
             color: #101820;
@@ -23,25 +25,38 @@
             font-weight: bold;
             cursor: pointer;
         }
-        #status { margin-top: 25px; }
+
+        button:hover {
+            background: #f0b84e;
+        }
+
+        #status {
+            margin-top: 25px;
+            color: #ccc;
+        }
     </style>
 </head>
+
 <body>
 
     <h1>EVE Character Dashboard</h1>
     <p>Connect your EVE Online character to continue.</p>
 
     <button id="login">Login with EVE Online</button>
+
     <div id="status">Not connected</div>
 
 <script>
-const CLIENT_ID = https://hotfuss-ops.github.io/eveonline/;
 
-// Must exactly match your registered EVE callback URL
-const REDIRECT_URI = window.location.origin +
-                     window.location.pathname;
+// ==========================================
+// CONFIGURATION
+// ==========================================
 
-// Permissions requested
+const CLIENT_ID = "145f5c92ab1c49fa81d600b1e05932be";
+
+const REDIRECT_URI =
+    "https://hotfuss-ops.github.io/eveonline/";
+
 const SCOPES = [
     "esi-wallet.read_character_wallet.v1",
     "esi-skills.read_skills.v1",
@@ -52,6 +67,11 @@ const SCOPES = [
 
 const status = document.getElementById("status");
 
+
+// ==========================================
+// PKCE HELPERS
+// ==========================================
+
 function base64url(bytes) {
     return btoa(String.fromCharCode(...new Uint8Array(bytes)))
         .replace(/\+/g, "-")
@@ -59,47 +79,83 @@ function base64url(bytes) {
         .replace(/=+$/, "");
 }
 
+
+// ==========================================
+// LOGIN WITH EVE ONLINE
+// ==========================================
+
 async function login() {
-    const random = crypto.getRandomValues(new Uint8Array(32));
-    const verifier = base64url(random);
 
-    const hash = await crypto.subtle.digest(
-        "SHA-256",
-        new TextEncoder().encode(verifier)
-    );
+    try {
+        status.textContent = "Preparing EVE authentication...";
 
-    const challenge = base64url(hash);
+        if (!window.crypto || !window.crypto.subtle) {
+            throw new Error("Secure browser connection required.");
+        }
 
-    const state = base64url(
-        crypto.getRandomValues(new Uint8Array(32))
-    );
+        // Generate code verifier
+        const random = crypto.getRandomValues(
+            new Uint8Array(32)
+        );
 
-    sessionStorage.setItem("eve_verifier", verifier);
-    sessionStorage.setItem("eve_state", state);
+        const verifier = base64url(random);
 
-    const params = new URLSearchParams({
-        response_type: "code",
-        client_id: CLIENT_ID,
-        redirect_uri: REDIRECT_URI,
-        scope: SCOPES.join(" "),
-        state: state,
-        code_challenge: challenge,
-        code_challenge_method: "S256"
-    });
+        // Generate SHA-256 challenge
+        const hash = await crypto.subtle.digest(
+            "SHA-256",
+            new TextEncoder().encode(verifier)
+        );
 
-    window.location.href =
-        "https://login.eveonline.com/v2/oauth/authorize?" +
-        params.toString();
+        const challenge = base64url(hash);
+
+        // Generate security state
+        const state = base64url(
+            crypto.getRandomValues(new Uint8Array(32))
+        );
+
+        // Save temporary authentication data
+        sessionStorage.setItem("eve_verifier", verifier);
+        sessionStorage.setItem("eve_state", state);
+
+        // Build authorization request
+        const params = new URLSearchParams({
+            response_type: "code",
+            client_id: CLIENT_ID,
+            redirect_uri: REDIRECT_URI,
+            scope: SCOPES.join(" "),
+            state: state,
+            code_challenge: challenge,
+            code_challenge_method: "S256"
+        });
+
+        // Redirect to EVE SSO
+        window.location.href =
+            "https://login.eveonline.com/v2/oauth/authorize?" +
+            params.toString();
+
+    } catch (error) {
+        status.textContent = "Login error: " + error.message;
+    }
 }
 
+
+// ==========================================
+// HANDLE EVE CALLBACK
+// ==========================================
+
 async function handleCallback() {
-    const params = new URLSearchParams(window.location.search);
+
+    const params = new URLSearchParams(
+        window.location.search
+    );
+
     const code = params.get("code");
     const returnedState = params.get("state");
     const error = params.get("error");
 
     if (error) {
-        status.textContent = "Login failed: " + error;
+        status.textContent =
+            "EVE login failed: " + error;
         return;
     }
 
@@ -108,22 +164,39 @@ async function handleCallback() {
     const savedState = sessionStorage.getItem("eve_state");
     const verifier = sessionStorage.getItem("eve_verifier");
 
-    if (!savedState || returnedState !== savedState || !verifier) {
-        status.textContent = "Security check failed. Please try again.";
+    // Verify security state
+    if (
+        !savedState ||
+        returnedState !== savedState ||
+        !verifier
+    ) {
+        status.textContent =
+            "Security verification failed. Please try again.";
         return;
     }
 
     // Remove authorization code from browser address
-    history.replaceState({}, document.title, REDIRECT_URI);
+    history.replaceState(
+        {},
+        document.title,
+        REDIRECT_URI
+    );
+
+    status.textContent = "Connecting to EVE Online...";
 
     try {
+
+        // Exchange authorization code for tokens
         const response = await fetch(
             "https://login.eveonline.com/v2/oauth/token",
             {
                 method: "POST",
+
                 headers: {
-                    "Content-Type": "application/x-www-form-urlencoded"
+                    "Content-Type":
+                        "application/x-www-form-urlencoded"
                 },
+
                 body: new URLSearchParams({
                     grant_type: "authorization_code",
                     code: code,
@@ -134,30 +207,58 @@ async function handleCallback() {
         );
 
         if (!response.ok) {
-            throw new Error("Token exchange failed: " + response.status);
+            const errorText = await response.text();
+            throw new Error(
+                "Token exchange failed: " +
+                response.status + " " + errorText
+            );
         }
 
         const tokens = await response.json();
 
-        sessionStorage.setItem("eve_access_token", tokens.access_token);
-        sessionStorage.setItem("eve_refresh_token", tokens.refresh_token);
+        // Store tokens for this browser session
+        sessionStorage.setItem(
+            "eve_access_token",
+            tokens.access_token
+        );
 
+        if (tokens.refresh_token) {
+            sessionStorage.setItem(
+                "eve_refresh_token",
+                tokens.refresh_token
+            );
+        }
+
+        // Clear temporary PKCE data
         sessionStorage.removeItem("eve_verifier");
         sessionStorage.removeItem("eve_state");
 
         status.textContent =
             "Successfully connected to EVE Online!";
 
-        document.getElementById("login").style.display = "none";
+        document.getElementById("login").style.display =
+            "none";
 
-    } catch (err) {
-        status.textContent = err.message;
+    } catch (error) {
+
+        status.textContent =
+            "Authentication error: " + error.message;
+
     }
 }
 
-document.getElementById("login").addEventListener("click", login);
+
+// ==========================================
+// INITIALIZE
+// ==========================================
+
+document.getElementById("login").addEventListener(
+    "click",
+    login
+);
 
 handleCallback();
+
 </script>
 
 </body>
